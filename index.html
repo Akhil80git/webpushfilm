@@ -1,0 +1,328 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Web Push Film - Login/Register + Notifications</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 900px; margin: auto; background: #f0f4f8; color: #333; }
+    .card { border: 1px solid #ddd; padding: 16px; margin: 10px 0; border-radius: 8px; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    input, button, textarea { padding: 10px; margin: 8px 0; width: 100%; border-radius: 5px; border: 1px solid #ccc; }
+    button { background: #007bff; color: white; cursor: pointer; transition: background 0.3s; }
+    button:hover { background: #0056b3; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 150px; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .hidden { display: none; }
+    .owner-form { background: #e9ecef; padding: 12px; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; overflow-x: auto; display: block; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #007bff; color: white; }
+    #feedback { position: fixed; top: 20px; right: 20px; padding: 12px; background: #28a745; color: white; border-radius: 5px; display: none; z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+    #feedback.error { background: #dc3545; }
+    .tabs { display: flex; margin-bottom: 10px; }
+    .tab-btn { flex: 1; padding: 10px; background: #eee; border: none; cursor: pointer; border-radius: 5px 5px 0 0; }
+    .tab-btn.active { background: white; border-bottom: 2px solid #007bff; }
+    /* Mobile Responsive */
+    @media (max-width: 600px) {
+      .row { flex-direction: column; }
+      table { font-size: 14px; }
+      body { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="feedback"></div>
+
+  <h2>Web Push Film — Login / Register / Notifications</h2>
+
+  <div id="auth-area" class="card">
+    <div id="topInfo" class="topbar hidden">
+      <div id="loggedEmail"></div>
+      <div>
+        <button id="logoutBtn">Logout</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <label><input type="radio" name="role" value="user" checked /> I am User</label>
+      <label><input type="radio" name="role" value="owner" /> I am Owner</label>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" id="loginTab">Login</button>
+      <button class="tab-btn" id="registerTab">Register</button>
+    </div>
+
+    <div id="loginBox">
+      <h3>Login</h3>
+      <input id="loginEmail" placeholder="Email" />
+      <input id="loginPass" placeholder="Password" type="password" />
+      <button id="loginBtn">Login</button>
+    </div>
+
+    <div id="registerBox" class="hidden">
+      <h3>Register (Users only)</h3>
+      <input id="regName" placeholder="Name" />
+      <input id="regEmail" placeholder="Email" />
+      <input id="regPass" placeholder="Password" type="password" />
+      <button id="regBtn">Register</button>
+    </div>
+
+  </div>
+
+  <div id="user-area" class="card hidden">
+    <h3>User Dashboard</h3>
+    <div>
+      <label><input type="checkbox" id="notifyToggle" /> Turn notifications ON</label>
+    </div>
+    <div id="ownerPanel" class="owner-form hidden">
+      <h4>Owner Panel — Users List</h4>
+      <table id="usersTable">
+        <thead><tr><th>Name</th><th>Email</th><th>Notify On?</th><th>Is Owner?</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <h4>Send Notification</h4>
+      <input id="ntitle" placeholder="Title" />
+      <textarea id="nmessage" placeholder="Message"></textarea>
+      <button id="sendBtn">Send Notification (to ON users)</button>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    let jwtToken = localStorage.getItem('jwtToken');  // Load from localStorage for auto-login
+    let userInfo = null;
+    let vapidPublicKey = null;
+
+    function $(id){ return document.getElementById(id); }
+
+    function showFeedback(msg, isError = false) {
+      const fb = $('feedback');
+      fb.textContent = msg;
+      if (isError) fb.classList.add('error'); else fb.classList.remove('error');
+      fb.style.display = 'block';
+      setTimeout(() => { fb.style.display = 'none'; }, 3000);
+    }
+
+    async function qs(url, opts){
+      opts = opts || {};
+      opts.headers = opts.headers || {};
+      if (jwtToken) opts.headers.Authorization = 'Bearer ' + jwtToken;
+      if (opts.body && typeof opts.body === 'object') {
+        opts.body = JSON.stringify(opts.body);
+        opts.headers['Content-Type'] = 'application/json';
+      }
+      const res = await fetch(url, opts);
+      return res.json();
+    }
+
+    // Role selection
+    const roleRadios = document.querySelectorAll('input[name="role"]');
+    roleRadios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (radio.value === 'owner') {
+          $('registerTab').classList.add('hidden');
+          switchTab('login'); // Switch to login if owner
+        } else {
+          $('registerTab').classList.remove('hidden');
+        }
+      });
+    });
+
+    // Tabs for login/register
+    function switchTab(tab) {
+      if (tab === 'login') {
+        $('loginTab').classList.add('active');
+        $('registerTab').classList.remove('active');
+        $('loginBox').classList.remove('hidden');
+        $('registerBox').classList.add('hidden');
+      } else {
+        $('loginTab').classList.remove('active');
+        $('registerTab').classList.add('active');
+        $('loginBox').classList.add('hidden');
+        $('registerBox').classList.remove('hidden');
+      }
+    }
+
+    $('loginTab').onclick = () => switchTab('login');
+    $('registerTab').onclick = () => switchTab('register');
+
+    // Register with auto-login
+    $('regBtn').onclick = async () => {
+      const name = $('regName').value.trim();
+      const email = $('regEmail').value.trim();
+      const password = $('regPass').value;
+      if (!name || !email || !password) return showFeedback('Fill all fields', true);
+      const regResp = await qs('/api/register', { method:'POST', body:{ name, email, password } });
+      if (regResp.message === 'Registered') {
+        const loginResp = await qs('/api/login', { method:'POST', body:{ email, password } });
+        if (loginResp.token) {
+          handleLoginSuccess(loginResp);
+        } else {
+          showFeedback('Auto-login failed', true);
+        }
+      } else {
+        showFeedback(regResp.error || 'Registration failed', true);
+      }
+    };
+
+    // Login
+    $('loginBtn').onclick = async () => {
+      const email = $('loginEmail').value.trim();
+      const password = $('loginPass').value;
+      if (!email || !password) return showFeedback('Fill all fields', true);
+      const r = await qs('/api/login', { method:'POST', body:{ email, password } });
+      if (r.token) {
+        handleLoginSuccess(r);
+      } else {
+        showFeedback(r.error || 'Login failed', true);
+      }
+    };
+
+    // Common login success handler
+    async function handleLoginSuccess(r) {
+      jwtToken = r.token;
+      localStorage.setItem('jwtToken', jwtToken);  // Store for auto-login next time
+      userInfo = { email: r.email, isOwner: r.isOwner };
+      $('auth-area').classList.add('hidden');
+      $('user-area').classList.remove('hidden');
+      $('topInfo').classList.remove('hidden');
+      $('loggedEmail').innerText = r.email;
+      if (r.isOwner) {
+        $('ownerPanel').classList.remove('hidden');
+        const usersData = await qs('/api/users', { method:'GET' });
+        const tbody = $('usersTable').querySelector('tbody');
+        tbody.innerHTML = '';
+        usersData.users.forEach(u => {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${u.name || 'N/A'}</td><td>${u.email}</td><td>${u.notify ? 'Yes' : 'No'}</td><td>${u.isOwner ? 'Yes' : 'No'}</td>`;
+          tbody.appendChild(row);
+        });
+      } else {
+        $('ownerPanel').classList.add('hidden');
+      }
+      await initServiceWorker();
+      const me = await qs('/api/me', { method:'GET' });
+      if (me && me.notify) $('notifyToggle').checked = me.notify;
+      if (me.notify) {
+        const reg = await navigator.serviceWorker.ready;
+        const existingSub = await reg.pushManager.getSubscription();
+        if (!existingSub) {
+          const sub = await subscribeUserToPush();
+          if (sub) {
+            await qs('/api/subscribe', { method:'POST', body:{ subscription: sub }});
+          } else {
+            $('notifyToggle').checked = false;
+          }
+        }
+      }
+      showFeedback('Logged in successfully.');
+    }
+
+    $('logoutBtn').onclick = async () => {
+      // Unsubscribe push on logout
+      await qs('/api/unsubscribe', { method:'POST' });
+      jwtToken = null;
+      userInfo = null;
+      localStorage.removeItem('jwtToken');  // Clear storage
+      $('auth-area').classList.remove('hidden');
+      $('user-area').classList.add('hidden');
+      $('topInfo').classList.add('hidden');
+      showFeedback('Logged out and unsubscribed.');
+    };
+
+    $('notifyToggle').onchange = async function() {
+      if (this.checked) {
+        const sub = await subscribeUserToPush();
+        if (sub) {
+          await qs('/api/subscribe', { method:'POST', body:{ subscription: sub }});
+          showFeedback('Subscribed.');
+        } else {
+          showFeedback('Subscription failed.', true);
+          this.checked = false;
+        }
+      } else {
+        await qs('/api/unsubscribe', { method:'POST' });
+        showFeedback('Unsubscribed.');
+      }
+    };
+
+    $('sendBtn').onclick = async () => {
+      const title = $('ntitle').value.trim();
+      const message = $('nmessage').value.trim();
+      if (!title || !message) return showFeedback('Fill title and message', true);
+      const r = await qs('/api/sendNotification', { method:'POST', body:{ title, message } });
+      if (r.message) {
+        showFeedback(`${r.message} (Success: ${r.success}, Errors: ${r.errors})`);
+      } else {
+        showFeedback(r.error || 'Send failed', true);
+      }
+    };
+
+    async function initServiceWorker(){
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        try {
+          const reg = await navigator.serviceWorker.register('/sw.js');
+          const res = await fetch('/api/vapidPublicKey');
+          const data = await res.json();
+          vapidPublicKey = data.publicKey;
+        } catch(e) {
+          console.error(e);
+        }
+      }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - base64String.length % 4) % 4);
+      const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+      const rawData = window.atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+      return outputArray;
+    }
+
+    async function subscribeUserToPush() {
+      if (!vapidPublicKey) {
+        const res = await fetch('/api/vapidPublicKey');
+        const d = await res.json();
+        vapidPublicKey = d.publicKey;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      try {
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+        return sub.toJSON();
+      } catch (err) {
+        console.error(err);
+        return null;
+      }
+    }
+
+    (async ()=> {
+      if ('serviceWorker' in navigator) {
+        try {
+          await navigator.serviceWorker.register('/sw.js');
+        } catch(e) {}
+      }
+      // Auto-login on load if token exists
+      if (jwtToken) {
+        try {
+          const me = await qs('/api/me', { method:'GET' });
+          if (me.email) {
+            handleLoginSuccess({ token: jwtToken, email: me.email, isOwner: me.isOwner, name: me.name });
+          } else {
+            localStorage.removeItem('jwtToken');
+            jwtToken = null;
+          }
+        } catch (e) {
+          localStorage.removeItem('jwtToken');
+          jwtToken = null;
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
